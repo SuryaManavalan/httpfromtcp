@@ -6,15 +6,19 @@ import (
 	"io"
 	"strings"
 	"unicode"
+
+	"surya.httpfromtcp/internal/headers"
 )
 
 const (
-	stateInitialized = iota
-	stateDone
+	requestStateInitialized = iota
+	requestStateParsingHeaders
+	requestStateDone
 )
 
 type Request struct {
 	RequestLine RequestLine
+	Headers     headers.Headers
 	state       int
 }
 
@@ -26,13 +30,14 @@ type RequestLine struct {
 
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	req := &Request{
-		state: stateInitialized,
+		state:   requestStateInitialized,
+		Headers: headers.NewHeaders(),
 	}
 
 	buffer := make([]byte, 8)
 	var accumulated []byte
 
-	for req.state != stateDone {
+	for req.state != requestStateDone {
 		n, err := reader.Read(buffer)
 		if n > 0 {
 			accumulated = append(accumulated, buffer[:n]...)
@@ -42,13 +47,11 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 				return nil, parseErr
 			}
 
-			// Remove consumed bytes from accumulated buffer
 			accumulated = accumulated[consumed:]
 		}
 
 		if err == io.EOF {
-			// If we still have data but haven't finished parsing, that's an error
-			if req.state != stateDone {
+			if req.state != requestStateDone {
 				return nil, errors.New("incomplete request")
 			}
 			break
@@ -63,40 +66,69 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 }
 
 func (r *Request) parse(data []byte) (int, error) {
-	if r.state == stateDone {
+	if r.state == requestStateDone {
 		return 0, nil
 	}
 
-	// Try to parse the request line
-	consumed, requestLine, err := parseRequestLine(data)
-	if err != nil {
-		return 0, err
+	totalBytesParsed := 0
+	for r.state != requestStateDone {
+		n, err := r.parseSingle(data[totalBytesParsed:])
+		if err != nil {
+			return totalBytesParsed, err
+		}
+
+		if n == 0 {
+			break
+		}
+
+		totalBytesParsed += n
 	}
 
-	// If we couldn't parse yet (no \r\n found), return 0 with no error
-	if consumed == 0 {
+	return totalBytesParsed, nil
+}
+
+func (r *Request) parseSingle(data []byte) (int, error) {
+	switch r.state {
+	case requestStateInitialized:
+		consumed, requestLine, err := parseRequestLine(data)
+		if err != nil {
+			return 0, err
+		}
+
+		if consumed == 0 {
+			return 0, nil
+		}
+
+		r.RequestLine = *requestLine
+		r.state = requestStateParsingHeaders
+
+		return consumed, nil
+
+	case requestStateParsingHeaders:
+		n, done, err := r.Headers.Parse(data)
+		if err != nil {
+			return 0, err
+		}
+
+		if done {
+			r.state = requestStateDone
+		}
+
+		return n, nil
+
+	default:
 		return 0, nil
 	}
-
-	// Successfully parsed the request line
-	r.RequestLine = *requestLine
-	r.state = stateDone
-
-	return consumed, nil
 }
 
 func parseRequestLine(data []byte) (int, *RequestLine, error) {
-	// Look for \r\n to find the end of the request line
 	idx := bytes.Index(data, []byte("\r\n"))
 	if idx == -1 {
-		// Haven't received the full line yet
 		return 0, nil, nil
 	}
 
-	// Extract the first line
 	firstLine := string(data[:idx])
 
-	// Split the request line into parts
 	parts := strings.Split(firstLine, " ")
 	if len(parts) != 3 {
 		return 0, nil, errors.New("invalid request line: expected 3 parts")
@@ -106,14 +138,12 @@ func parseRequestLine(data []byte) (int, *RequestLine, error) {
 	requestTarget := parts[1]
 	httpVersionFull := parts[2]
 
-	// Verify method contains only capital alphabetic characters
 	for _, ch := range method {
 		if !unicode.IsUpper(ch) {
 			return 0, nil, errors.New("invalid method: must contain only capital letters")
 		}
 	}
 
-	// Parse and verify HTTP version
 	if !strings.HasPrefix(httpVersionFull, "HTTP/") {
 		return 0, nil, errors.New("invalid HTTP version format")
 	}
@@ -123,7 +153,6 @@ func parseRequestLine(data []byte) (int, *RequestLine, error) {
 		return 0, nil, errors.New("unsupported HTTP version: only HTTP/1.1 is supported")
 	}
 
-	// Return bytes consumed (including \r\n)
 	consumed := idx + 2
 
 	return consumed, &RequestLine{
