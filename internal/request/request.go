@@ -3,7 +3,9 @@ package request
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -13,12 +15,14 @@ import (
 const (
 	requestStateInitialized = iota
 	requestStateParsingHeaders
+	requestStateParsingBody
 	requestStateDone
 )
 
 type Request struct {
 	RequestLine RequestLine
 	Headers     headers.Headers
+	Body        []byte
 	state       int
 }
 
@@ -111,10 +115,34 @@ func (r *Request) parseSingle(data []byte) (int, error) {
 		}
 
 		if done {
-			r.state = requestStateDone
+			r.state = requestStateParsingBody
 		}
 
 		return n, nil
+
+	case requestStateParsingBody:
+		contentLengthStr := r.Headers.Get("content-length")
+		if contentLengthStr == "" {
+			r.state = requestStateDone
+			return 0, nil
+		}
+
+		contentLength, err := strconv.Atoi(contentLengthStr)
+		if err != nil {
+			return 0, fmt.Errorf("invalid content-length: %w", err)
+		}
+
+		r.Body = append(r.Body, data...)
+
+		if len(r.Body) > contentLength {
+			return 0, fmt.Errorf("body length exceeds content-length: got %d, expected %d", len(r.Body), contentLength)
+		}
+
+		if len(r.Body) == contentLength {
+			r.state = requestStateDone
+		}
+
+		return len(data), nil
 
 	default:
 		return 0, nil

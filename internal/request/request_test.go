@@ -122,14 +122,14 @@ func TestHeadersParse(t *testing.T) {
 	assert.Equal(t, "session=abc, token=xyz", r.Headers["set-cookie"])
 
 	reader = &chunkReader{
-		data:            "GET / HTTP/1.1\r\nContent-Type: application/json\r\nCONTENT-LENGTH: 42\r\n\r\n",
+		data:            "GET / HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n",
 		numBytesPerRead: 2,
 	}
 	r, err = RequestFromReader(reader)
 	require.NoError(t, err)
 	require.NotNil(t, r)
 	assert.Equal(t, "application/json", r.Headers["content-type"])
-	assert.Equal(t, "42", r.Headers["content-length"])
+	assert.Equal(t, "0", r.Headers["content-length"])
 
 	reader = &chunkReader{
 		data:            "GET / HTTP/1.1\r\nHost: localhost:42069\r\n",
@@ -138,4 +138,65 @@ func TestHeadersParse(t *testing.T) {
 	r, err = RequestFromReader(reader)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "incomplete")
+}
+
+func TestBodyParse(t *testing.T) {
+	reader := &chunkReader{
+		data: "POST /submit HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"Content-Length: 13\r\n" +
+			"\r\n" +
+			"hello world!\n",
+		numBytesPerRead: 3,
+	}
+	r, err := RequestFromReader(reader)
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Equal(t, "hello world!\n", string(r.Body))
+
+	reader = &chunkReader{
+		data: "POST /submit HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"Content-Length: 0\r\n" +
+			"\r\n",
+		numBytesPerRead: 5,
+	}
+	r, err = RequestFromReader(reader)
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Empty(t, r.Body)
+
+	reader = &chunkReader{
+		data: "POST /submit HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"\r\n",
+		numBytesPerRead: 4,
+	}
+	r, err = RequestFromReader(reader)
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Empty(t, r.Body)
+
+	reader = &chunkReader{
+		data: "POST /submit HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"Content-Length: 20\r\n" +
+			"\r\n" +
+			"partial content",
+		numBytesPerRead: 3,
+	}
+	r, err = RequestFromReader(reader)
+	require.Error(t, err)
+
+	reader = &chunkReader{
+		data: "POST /submit HTTP/1.1\r\n" +
+			"Host: localhost:42069\r\n" +
+			"\r\n" +
+			"this body exists but no content-length",
+		numBytesPerRead: 10,
+	}
+	r, err = RequestFromReader(reader)
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	assert.Empty(t, r.Body)
 }
