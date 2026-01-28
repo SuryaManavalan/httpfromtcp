@@ -16,6 +16,10 @@ func (h Headers) Get(key string) string {
 	return h[strings.ToLower(key)]
 }
 
+func (h Headers) Set(key, value string) {
+	h[strings.ToLower(key)] = value
+}
+
 func isValidTokenChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') ||
 		(c >= 'A' && c <= 'Z') ||
