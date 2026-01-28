@@ -1,46 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"net"
+
+	"surya.httpfromtcp/internal/request"
 )
-
-func getLinesChannel(f io.ReadCloser) <-chan string {
-	ch := make(chan string)
-
-	go func() {
-		defer close(ch)
-		defer f.Close()
-
-		str := ""
-		for {
-			data := make([]byte, 8)
-			n, err := f.Read(data)
-			if err != nil {
-				break
-			}
-
-			data = data[:n]
-			if i := bytes.IndexByte(data, '\n'); i >= 0 {
-				str += string(data[:i])
-				data = data[i+1:]
-				ch <- str
-				str = ""
-			}
-
-			str += string(data)
-		}
-
-		if len(str) != 0 {
-			ch <- str
-		}
-	}()
-
-	return ch
-}
 
 func main() {
 	listener, err := net.Listen("tcp", ":42069")
@@ -58,11 +24,19 @@ func main() {
 
 		fmt.Println("connection accepted")
 
-		ch := getLinesChannel(conn)
-		for line := range ch {
-			fmt.Println(line)
+		req, err := request.RequestFromReader(conn)
+		if err != nil {
+			log.Printf("failed to parse request: %s", err)
+			conn.Close()
+			continue
 		}
 
+		fmt.Println("Request line:")
+		fmt.Printf("- Method: %s\n", req.RequestLine.Method)
+		fmt.Printf("- Target: %s\n", req.RequestLine.RequestTarget)
+		fmt.Printf("- Version: %s\n", req.RequestLine.HttpVersion)
+
+		conn.Close()
 		fmt.Println("connection closed")
 	}
 }
